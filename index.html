@@ -1,0 +1,195 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>流体パーティクル 流線 リアルタイム Canvas</title>
+<script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body class="bg-gray-950 text-white min-h-screen flex flex-col items-center p-2">
+<h1 class="text-xl font-bold mt-2 mb-1 text-cyan-300">🌊 流体パーティクル 流線シミュレーション</h1>
+<p class="text-gray-500 mb-2 text-xs">マウスで渦・発散場を追加。パーティクルが流れる流体シミュレーション</p>
+
+<div class="flex gap-2 mb-2 flex-wrap justify-center text-sm">
+  <label>モード:
+    <select id="mode" class="bg-gray-800 rounded px-1 py-0.5 ml-1 text-xs">
+      <option value="vortex">渦（ボルテックス）</option>
+      <option value="source">発散（ソース）</option>
+      <option value="sink">収束（シンク）</option>
+      <option value="shear">せん断</option>
+    </select>
+  </label>
+  <label class="text-xs flex items-center">強さ:
+    <input type="range" id="strength" min="10" max="200" value="80" class="ml-1 w-20">
+    <span id="strengthVal" class="ml-1 text-cyan-300">80</span>
+  </label>
+  <button id="btnClear" class="bg-gray-700 hover:bg-gray-600 px-2 py-0.5 rounded text-xs">クリア</button>
+  <button id="btnPause" class="bg-blue-700 hover:bg-blue-600 px-2 py-0.5 rounded text-xs">一時停止</button>
+</div>
+
+<canvas id="fluidCanvas" width="700" height="500" class="border border-gray-700 rounded w-full max-w-3xl cursor-crosshair">お使いのブラウザはCanvasに対応していません</canvas>
+<p class="text-xs text-gray-600 mt-1">クリック＆ドラッグで流場を追加</p>
+
+<script>
+const canvas = document.getElementById('fluidCanvas');
+const ctx = canvas.getContext('2d');
+const W = canvas.width, H = canvas.height;
+
+const NUM_PARTICLES = 800;
+const particles = [];
+const sources = []; // [{x, y, type, strength}]
+let paused = false;
+let isDown = false;
+let mouseX = 0, mouseY = 0;
+
+document.getElementById('strength').addEventListener('input', function() {
+  document.getElementById('strengthVal').textContent = this.value;
+});
+
+for (let i = 0; i < NUM_PARTICLES; i++) {
+  particles.push({
+    x: Math.random() * W,
+    y: Math.random() * H,
+    vx: 0, vy: 0,
+    age: Math.floor(Math.random() * 200),
+    hue: Math.floor(Math.random() * 60) + 180,
+  });
+}
+
+function getField(x, y) {
+  let vx = 0, vy = 0;
+  // Base uniform flow (right)
+  vx += 0.3;
+
+  sources.forEach(s => {
+    const dx = x - s.x, dy = y - s.y;
+    const r2 = dx*dx + dy*dy;
+    if (r2 < 1) return;
+    const r = Math.sqrt(r2);
+    const str = s.strength;
+
+    switch(s.type) {
+      case 'vortex':
+        vx += -str * dy / r2;
+        vy += str * dx / r2;
+        break;
+      case 'source':
+        vx += str * dx / r2;
+        vy += str * dy / r2;
+        break;
+      case 'sink':
+        vx -= str * dx / r2;
+        vy -= str * dy / r2;
+        break;
+      case 'shear':
+        vx += str * Math.sign(dy) / (r + 5);
+        break;
+    }
+  });
+  return { vx, vy };
+}
+
+function getSpeedColor(speed, hue) {
+  const h = (180 + speed * 20) % 360;
+  const l = 40 + Math.min(speed * 5, 35);
+  return `hsl(${h}, 80%, ${l}%)`;
+}
+
+let lastTime = 0;
+function draw(timestamp) {
+  if (!paused) {
+    const dt = Math.min((timestamp - lastTime) / 16, 3);
+    lastTime = timestamp;
+
+    // Fade trail
+    ctx.fillStyle = 'rgba(5, 5, 15, 0.08)';
+    ctx.fillRect(0, 0, W, H);
+
+    particles.forEach(p => {
+      const { vx, vy } = getField(p.x, p.y);
+      p.vx = p.vx * 0.9 + vx * 0.1;
+      p.vy = p.vy * 0.9 + vy * 0.1;
+      const speed = Math.sqrt(p.vx*p.vx + p.vy*p.vy);
+
+      const nx = p.x + p.vx * dt;
+      const ny = p.y + p.vy * dt;
+
+      if (nx < 0 || nx > W || ny < 0 || ny > H || p.age > 300) {
+        p.x = Math.random() * W;
+        p.y = Math.random() * H;
+        p.vx = 0; p.vy = 0;
+        p.age = 0;
+      } else {
+        ctx.strokeStyle = getSpeedColor(speed, p.hue);
+        ctx.lineWidth = 1;
+        ctx.globalAlpha = Math.min(1, p.age / 50) * 0.7;
+        ctx.beginPath();
+        ctx.moveTo(p.x, p.y);
+        ctx.lineTo(nx, ny);
+        ctx.stroke();
+        p.x = nx;
+        p.y = ny;
+        p.age++;
+      }
+    });
+    ctx.globalAlpha = 1;
+
+    // Draw source markers
+    sources.forEach(s => {
+      const colors = { vortex: '#22D3EE', source: '#34D399', sink: '#F87171', shear: '#FCD34D' };
+      ctx.fillStyle = colors[s.type] || '#FFF';
+      ctx.globalAlpha = 0.7;
+      ctx.beginPath();
+      ctx.arc(s.x, s.y, 5, 0, Math.PI*2);
+      ctx.fill();
+      ctx.globalAlpha = 1;
+    });
+  }
+  requestAnimationFrame(draw);
+}
+
+canvas.addEventListener('mousedown', e => {
+  isDown = true;
+  const rect = canvas.getBoundingClientRect();
+  const scaleX = W / rect.width;
+  const scaleY = H / rect.height;
+  const x = (e.clientX - rect.left) * scaleX;
+  const y = (e.clientY - rect.top) * scaleY;
+  const type = document.getElementById('mode').value;
+  const strength = parseInt(document.getElementById('strength').value);
+  if (sources.length > 20) sources.shift();
+  sources.push({ x, y, type, strength });
+});
+canvas.addEventListener('mousemove', e => {
+  if (!isDown) return;
+  const rect = canvas.getBoundingClientRect();
+  const scaleX = W / rect.width;
+  const scaleY = H / rect.height;
+  const x = (e.clientX - rect.left) * scaleX;
+  const y = (e.clientY - rect.top) * scaleY;
+  const type = document.getElementById('mode').value;
+  const strength = parseInt(document.getElementById('strength').value);
+  if (sources.length > 20) sources.shift();
+  sources.push({ x, y, type, strength });
+});
+canvas.addEventListener('mouseup', () => { isDown = false; });
+canvas.addEventListener('mouseleave', () => { isDown = false; });
+
+document.getElementById('btnClear').addEventListener('click', () => {
+  sources.length = 0;
+  ctx.fillStyle = '#050505';
+  ctx.fillRect(0, 0, W, H);
+  particles.forEach(p => { p.x = Math.random()*W; p.y = Math.random()*H; p.vx=0; p.vy=0; p.age=0; });
+});
+
+document.getElementById('btnPause').addEventListener('click', () => {
+  paused = !paused;
+  document.getElementById('btnPause').textContent = paused ? '再開' : '一時停止';
+});
+
+ctx.fillStyle = '#050505';
+ctx.fillRect(0, 0, W, H);
+requestAnimationFrame(draw);
+</script>
+</body>
+</html>
